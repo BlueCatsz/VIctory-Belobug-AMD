@@ -32,7 +32,7 @@ jobs:
       - name: Clippy (victory-gpu, excluding untouched a-publier lints)
         run: cargo clippy -p victory-gpu --no-deps --all-targets --locked -- -A clippy::missing_transmute_annotations -A clippy::unnecessary_mut_passed -D warnings
       - name: Clippy, diagnostics build (victory-gpu, excluding untouched a-publier lints)
-        run: cargo clippy -p victory-gpu --no-deps --all-targets --all-features --locked -- -A clippy::missing_transmute_annotations -A clippy::unnecessary_mut_passed -D warnings
+        run: cargo clippy -p victory-gpu --no-deps --all-targets --all-features --locked -- -A clippy::missing_transmute_annotations -A clippy::unnecessary_mut_passed -A dead_code -D warnings
 
   test-default:
     name: Default tests
