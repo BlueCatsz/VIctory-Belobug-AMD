@@ -37,6 +37,8 @@ const SHADERS: &str = "known-shaders.bin";
 const PIPELINES: &str = "known-pipelines.bin";
 /// Compiler crashes and hangs recorded by `victory warm` and the runtime guard.
 pub const WARM_BAD_FILE: &str = "warm-bad.txt";
+/// Pipelines that `victory warm` completed without crashing or hanging, keyed by fingerprint.
+pub const WARM_DONE_FILE: &str = "warm-done.txt";
 /// Stages by their number in the files.
 const STAGES: [&str; 8] =
     ["vertex", "pixel", "domain", "hull", "geometry", "compute", "amplification", "mesh"];
@@ -279,44 +281,100 @@ pub fn format_bad_entry(key: &str, fingerprint: &str, reason: &str) -> String {
     }
 }
 
-/// Pipeline keys from `warm-bad.txt` that apply to `fingerprint`.
+/// Pipeline keys from `warm-done.txt` that match `fingerprint`.
+pub fn parse_done_keys(text: &str, fingerprint: &str) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        if let (Some(of), Some(key)) = (parts.next(), parts.next())
+            && of == fingerprint
+        {
+            keys.insert(key.to_owned());
+        }
+    }
+    keys
+}
+
+/// Parses one `warm-bad.txt` line into `(key, optional_fingerprint)`.
+/// Returns `None` for blank lines and `#` comments.
+fn parse_bad_line(line: &str) -> Option<(&str, Option<&str>)> {
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let mut parts = line.split_whitespace();
+    let first = parts.next()?;
+    if let Some(second) = parts.next() {
+        if let Some(fp) = second.strip_prefix("fp=")
+            && is_hex(fp, 16)
+        {
+            return Some((first, Some(fp)));
+        }
+        if is_hex(first, 16) && is_hex(second, 32) {
+            return Some((second, Some(first)));
+        }
+    }
+    Some((first, None))
+}
+
+/// Pipeline keys from `warm-bad.txt` that `victory warm` should skip for
+/// `fingerprint`.
 ///
 /// Blank lines and `#` comments are ignored. Entries tagged with a
 /// fingerprint (`<key> fp=<16-hex-fingerprint> ...`, or
 /// `<16-hex-fingerprint> <32-hex-key> ...`) apply only when their
-/// fingerprint matches `fingerprint`, so a driver or translator update
-/// automatically retries them. Legacy or manually added bare-key lines
-/// (`<key> ...`) continue to apply regardless of fingerprint.
+/// fingerprint matches `fingerprint`, so `victory warm` automatically
+/// retries them after a driver or translator update. Legacy or manually
+/// added bare-key lines (`<key> ...`) continue to apply regardless of
+/// fingerprint.
 pub fn parse_bad_keys(text: &str, fingerprint: &str) -> HashSet<String> {
     let mut keys = HashSet::new();
     for line in text.lines() {
-        let line = line.trim_start();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+        if let Some((key, entry_fp)) = parse_bad_line(line)
+            && entry_fp.is_none_or(|fp| fp == fingerprint)
+        {
+            keys.insert(key.to_owned());
         }
-        let mut parts = line.split_whitespace();
-        let Some(first) = parts.next() else {
-            continue;
-        };
-        if let Some(second) = parts.next() {
-            if let Some(fp) = second.strip_prefix("fp=")
-                && is_hex(fp, 16)
-            {
-                if fp == fingerprint {
-                    keys.insert(first.to_owned());
-                }
-                continue;
-            }
-            if is_hex(first, 16) && is_hex(second, 32) {
-                if first == fingerprint {
-                    keys.insert(second.to_owned());
-                }
-                continue;
-            }
-        }
-        keys.insert(first.to_owned());
     }
     keys
+}
+
+/// Pipeline keys from `warm-bad.txt` that a running title should skip for
+/// `fingerprint`.
+///
+/// Unlike `victory warm` (which compiles in isolated child processes with a
+/// timeout), the title compiles in-process without a compile timeout and its
+/// crash guard only catches access violations below `0x10000`. Entries from
+/// an older fingerprint therefore stay quarantined in the title until
+/// `victory warm` completes them under `fingerprint` and records them in
+/// `warm-done.txt`. Current-fingerprint and legacy/manual bare-key entries
+/// always apply, even if the key also appears in `warm-done.txt`.
+pub fn parse_runtime_bad_keys(
+    bad_text: &str,
+    done_text: &str,
+    fingerprint: &str,
+) -> HashSet<String> {
+    let mut always_bad = HashSet::new();
+    let mut stale_bad = HashSet::new();
+    for line in bad_text.lines() {
+        let Some((key, entry_fp)) = parse_bad_line(line) else {
+            continue;
+        };
+        match entry_fp {
+            Some(fp) if fp != fingerprint => {
+                stale_bad.insert(key.to_owned());
+            }
+            _ => {
+                always_bad.insert(key.to_owned());
+            }
+        }
+    }
+    if !stale_bad.is_empty() && !done_text.is_empty() {
+        let done = parse_done_keys(done_text, fingerprint);
+        stale_bad.retain(|key| !done.contains(key));
+    }
+    always_bad.extend(stale_bad);
+    always_bad
 }
 
 /// The translations of earlier runs are in `dir` (the pipeline library is
@@ -694,6 +752,57 @@ mod tests {
                 k_bare,
                 "manual-skip-key".to_owned(),
                 k_bad_tag,
+            ])
+        );
+    }
+
+    #[test]
+    fn runtime_bad_keys_keep_stale_entries_until_warm_done_confirms_them() {
+        let k_stale_unverified = "a".repeat(32);
+        let k_stale_verified = "b".repeat(32);
+        let k_fp_first_verified = "c".repeat(32);
+        let k_both_stale_and_current = "d".repeat(32);
+        let k_legacy = "e".repeat(32);
+
+        let bad_text = format!(
+            "\n   \n# comment\n\
+             {}\n\
+             {}\n\
+             0011223344556677 {k_fp_first_verified} fp-first stale\n\
+             {}\n\
+             {}\n\
+             {k_legacy} legacy crash\n",
+            format_bad_entry(&k_stale_unverified, "0011223344556677", "hung for 180 s"),
+            format_bad_entry(&k_stale_verified, "0011223344556677", "exit code: 0xc0000005"),
+            format_bad_entry(&k_both_stale_and_current, "0011223344556677", "old crash"),
+            format_bad_entry(&k_both_stale_and_current, "8899aabbccddeeff", "new crash"),
+        );
+
+        let done_text = format!(
+            "\n# done\n\
+             0011223344556677 {k_stale_unverified}\n\
+             8899aabbccddeeff {k_stale_verified}\n\
+             8899aabbccddeeff {k_fp_first_verified}\n\
+             8899aabbccddeeff {k_both_stale_and_current}\n\
+             8899aabbccddeeff {k_legacy}\n"
+        );
+
+        assert_eq!(
+            parse_runtime_bad_keys(&bad_text, "", "8899aabbccddeeff"),
+            HashSet::from([
+                k_stale_unverified.clone(),
+                k_stale_verified,
+                k_fp_first_verified,
+                k_both_stale_and_current.clone(),
+                k_legacy.clone(),
+            ])
+        );
+        assert_eq!(
+            parse_runtime_bad_keys(&bad_text, &done_text, "8899aabbccddeeff"),
+            HashSet::from([
+                k_stale_unverified,
+                k_both_stale_and_current,
+                k_legacy,
             ])
         );
     }

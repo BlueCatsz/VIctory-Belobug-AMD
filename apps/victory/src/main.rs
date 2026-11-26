@@ -124,9 +124,10 @@ enum Command {
     /// of the translator or the driver. Goes on where it was stopped.
     ///
     /// Pipelines that crash or hang the compiler are listed in `warm-bad.txt`
-    /// with the current fingerprint and retried automatically after a driver
-    /// or translator change. Set `VICTORY_WARM_BAD=0` to ignore `warm-bad.txt`
-    /// for this invocation.
+    /// with the current fingerprint; `victory warm` retries them automatically
+    /// after a driver or translator change, and the title clears them once
+    /// `warm-done.txt` records them under the new fingerprint. Set
+    /// `VICTORY_WARM_BAD=0` to ignore `warm-bad.txt` for this invocation.
     #[cfg(windows)]
     Warm {
         /// Processes at once (default: two thirds of the logical cores).

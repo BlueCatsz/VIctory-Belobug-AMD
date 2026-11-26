@@ -106,9 +106,11 @@ static SKIPPED_BAD: AtomicU64 = AtomicU64::new(0);
 /// The keys of the pipelines the driver's compiler crashed or hung on
 /// (`warm-bad.txt` beside the pipeline library). Recorded entries use
 /// `<key> fp=<fingerprint> ...` so older binaries still see the key in
-/// column one while driver or translator changes retry them automatically;
-/// bare `<key> ...` lines remain compatible and `#` begins a comment.
-/// Loaded on first use; `VICTORY_WARM_BAD=0` leaves the file unread.
+/// column one; entries from an older fingerprint stay quarantined in a
+/// running title until `warm-done.txt` records the key under the current
+/// fingerprint (while `victory warm` retries them automatically). Bare
+/// `<key> ...` lines always apply and `#` begins a comment. Loaded on first
+/// use; `VICTORY_WARM_BAD=0` leaves the file unread.
 static BAD_KEYS: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
 
 fn bad_keys<R>(f: impl FnOnce(&mut std::collections::HashSet<String>) -> R) -> R {
@@ -117,13 +119,17 @@ fn bad_keys<R>(f: impl FnOnce(&mut std::collections::HashSet<String>) -> R) -> R
         if super::known::bad_list_disabled() {
             return Default::default();
         }
-        let listed = super::library::folder()
-            .and_then(|d| std::fs::read_to_string(d.join(super::known::WARM_BAD_FILE)).ok())
+        let Some(dir) = super::library::folder() else {
+            return Default::default();
+        };
+        let listed = std::fs::read_to_string(dir.join(super::known::WARM_BAD_FILE))
             .unwrap_or_default();
         if listed.is_empty() {
             return Default::default();
         }
-        super::known::parse_bad_keys(&listed, &super::known::fingerprint())
+        let done = std::fs::read_to_string(dir.join(super::known::WARM_DONE_FILE))
+            .unwrap_or_default();
+        super::known::parse_runtime_bad_keys(&listed, &done, &super::known::fingerprint())
     });
     f(keys)
 }

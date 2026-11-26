@@ -28,7 +28,7 @@ fn folder() -> Result<PathBuf> {
 
 fn select_pipelines(
     keys: &[String],
-    done: &HashSet<&str>,
+    done: &HashSet<String>,
     bad: &HashSet<String>,
     early: &HashSet<&str>,
     again: bool,
@@ -57,18 +57,11 @@ pub fn run(jobs: Option<usize>, limit: Option<usize>, again: bool, used: bool, t
     let began = Instant::now();
     victory_hle::known_pipelines::use_translations(dir.with_file_name("shaders"));
     let fingerprint = known::fingerprint();
-    let done_file = dir.join("warm-done.txt");
+    let done_file = dir.join(known::WARM_DONE_FILE);
     let bad_file = dir.join(known::WARM_BAD_FILE);
     let keys = known::keys(&dir);
     let listed = std::fs::read_to_string(&done_file).unwrap_or_default();
-    let mut done: HashSet<&str> = HashSet::new();
-    for line in listed.lines() {
-        if let Some((of, key)) = line.split_once(' ')
-            && of == fingerprint
-        {
-            done.insert(key);
-        }
-    }
+    let done = known::parse_done_keys(&listed, &fingerprint);
     let bad: HashSet<String> = if known::bad_list_disabled() {
         HashSet::new()
     } else {
@@ -383,7 +376,7 @@ mod tests {
             k_legacy_bad.clone(),
             k_fresh.clone(),
         ];
-        let done = HashSet::from([k_done.as_str()]);
+        let done = HashSet::from([k_done]);
         let early = HashSet::from([k_bad_current.as_str(), k_fresh.as_str()]);
         let current_entry = known::format_bad_entry(&k_bad_current, "1111111111111111", "exit code: 0xc0000005");
         assert_eq!(current_entry.split(' ').next(), Some(k_bad_current.as_str()));

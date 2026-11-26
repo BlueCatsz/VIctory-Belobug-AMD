@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -51,6 +52,7 @@ fn warm_bad_fingerprint_override_again_and_help() {
     let help_stdout = String::from_utf8_lossy(&help.stdout);
     assert!(help_stdout.contains("VICTORY_WARM_BAD=0"), "{help_stdout}");
     assert!(help_stdout.contains("warm-bad.txt"), "{help_stdout}");
+    assert!(help_stdout.contains("warm-done.txt"), "{help_stdout}");
 
     let root = tempfile::tempdir().unwrap();
     let cache = root.path().join("cache");
@@ -104,10 +106,20 @@ fn warm_bad_fingerprint_override_again_and_help() {
         "{out_again}"
     );
 
-    // Changing a translator switch rotates the fingerprint, expiring fp-tagged entries automatically.
-    let out_new_fp = run_warm(root.path(), &cache, &[("VICTORY_WAVE_WIDE", "0")], &[]);
-    let fp_new = parse_fingerprint(&out_new_fp);
+    // Changing a translator switch rotates the fingerprint: runtime keeps stale
+    // fp-tagged entries quarantined until `victory warm` records them in `warm-done.txt`.
+    let probe_new = run_warm(root.path(), &cache, &[("VICTORY_WAVE_WIDE", "0")], &["--limit", "0"]);
+    let fp_new = parse_fingerprint(&probe_new);
     assert_ne!(fp_new, fp_base);
+    let bad_text = fs::read_to_string(pipelines.join("warm-bad.txt")).unwrap();
+    let done_before_warm = fs::read_to_string(pipelines.join("warm-done.txt")).unwrap();
+    assert_eq!(
+        victory_hle::known_pipelines::parse_runtime_bad_keys(&bad_text, &done_before_warm, &fp_new),
+        HashSet::from([k_fp_bad.clone(), k_legacy_bad.clone()])
+    );
+
+    let out_new_fp = run_warm(root.path(), &cache, &[("VICTORY_WAVE_WIDE", "0")], &[]);
+    assert_eq!(parse_fingerprint(&out_new_fp), fp_new);
     assert!(
         out_new_fp.contains(&format!("4 pipelines known, 0 made before ({fp_new}), 1 bad; 3 to make")),
         "{out_new_fp}"
@@ -123,5 +135,9 @@ fn warm_bad_fingerprint_override_again_and_help() {
     assert_eq!(
         new_fp_keys,
         [k_fp_bad.as_str(), k_fresh.as_str(), k_other.as_str()]
+    );
+    assert_eq!(
+        victory_hle::known_pipelines::parse_runtime_bad_keys(&bad_text, &done, &fp_new),
+        HashSet::from([k_legacy_bad])
     );
 }
