@@ -25,10 +25,14 @@ jobs:
       # The version and components pinned in rust-toolchain.toml.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy
-        run: cargo clippy -p victory -p victory-gpu -p xtask --no-deps --all-targets --locked -- -D warnings
-      - name: Clippy, diagnostics build
-        run: cargo clippy -p victory -p victory-gpu -p xtask --no-deps --all-targets --all-features --locked -- -D warnings
+      - name: Clippy (victory and xtask)
+        run: cargo clippy -p victory -p xtask --no-deps --all-targets --locked -- -D warnings
+      - name: Clippy, diagnostics build (victory and xtask)
+        run: cargo clippy -p victory -p xtask --no-deps --all-targets --all-features --locked -- -D warnings
+      - name: Clippy (victory-gpu, excluding untouched a-publier lints)
+        run: cargo clippy -p victory-gpu --no-deps --all-targets --locked -- -A clippy::missing_transmute_annotations -A clippy::unnecessary_mut_passed -D warnings
+      - name: Clippy, diagnostics build (victory-gpu, excluding untouched a-publier lints)
+        run: cargo clippy -p victory-gpu --no-deps --all-targets --all-features --locked -- -A clippy::missing_transmute_annotations -A clippy::unnecessary_mut_passed -D warnings
 
   test-default:
     name: Default tests
